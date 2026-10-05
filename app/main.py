@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import clock, omd_client, storage
-from app.errors import SubmissionNotFound, register_error_handlers
+from app.errors import InvalidState, SubmissionNotFound, register_error_handlers
 from app.models import (
     AuditEntry,
     Error,
@@ -26,6 +26,7 @@ from app.models import (
     SubmissionStatus,
     Topic,
     TopicItem,
+    WithdrawRequest,
 )
 
 VERSION = "0.1.0"
@@ -37,6 +38,9 @@ TOPIC_NAMES = {
     Topic.OTHER: "Cits",
 }
 REPLY_DAYS = 30  # Vienkāršots termiņš: 30 kalendāra dienas
+# CR-A: FORWARDED pieteikumā ir atvērts jautājums. Līdz PO atbildei atļauti tikai
+# līgumā tieši nosauktie statusi.
+WITHDRAWABLE = (SubmissionStatus.RECEIVED.value, SubmissionStatus.IN_PROGRESS.value)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -158,6 +162,25 @@ def get_submission_audit(submission_id: str) -> list[AuditEntry]:
     if storage.get(submission_id) is None:
         raise SubmissionNotFound()
     return [AuditEntry(**entry) for entry in storage.list_audit(submission_id)]
+
+
+@app.post(
+    "/submissions/{submission_id}/withdraw",
+    response_model=Submission,
+    responses={400: {"model": Error}, 404: {"model": Error}, 409: {"model": Error}},
+    tags=["Darbības ar iesniegumu"],
+)
+def withdraw_submission(submission_id: str, data: WithdrawRequest) -> Submission:
+    if storage.get(submission_id) is None:
+        raise SubmissionNotFound()
+    if not storage.change_status_if(
+        submission_id, WITHDRAWABLE, SubmissionStatus.WITHDRAWN.value
+    ):
+        raise InvalidState()
+    storage.add_audit(submission_id, "WITHDRAW", data.reason)
+    # Iemeslu žurnālā nerakstām: tajā var būt personas dati.
+    logger.info("Iesniegums atsaukts: %s", submission_id)
+    return Submission(**storage.get(submission_id))
 
 
 app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
