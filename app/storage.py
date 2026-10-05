@@ -242,8 +242,25 @@ def update_status(submission_id: str, status: str) -> dict | None:
     if cursor.rowcount == 0:
         return None
     record = get(submission_id)
-    logger.info("Statuss mainīts: %s", record)
+    # Žurnālā tikai ID un statuss. Nekad personas dati vai iesnieguma teksts.
+    logger.info("Statuss mainīts: %s -> %s", submission_id, status)
     return record
+
+
+def change_status_if(submission_id: str, allowed: tuple[str, ...], status: str) -> bool:
+    """Maina statusu tikai tad, ja pašreizējais ir `allowed`. Pārbaude un maiņa ir
+    viens vaicājums, lai divi vienlaicīgi pieprasījumi nevarētu abi izdoties."""
+    placeholders = ", ".join("?" for _ in allowed)
+    with _lock:
+        cursor = _conn.execute(
+            "UPDATE submissions SET status = ? "
+            f"WHERE id = ? AND status IN ({placeholders})",
+            (status, submission_id, *allowed),
+        )
+    if cursor.rowcount == 0:
+        return False
+    logger.info("Statuss mainīts: %s -> %s", submission_id, status)
+    return True
 
 
 def update_due_date(submission_id: str, due_date: str) -> dict:
